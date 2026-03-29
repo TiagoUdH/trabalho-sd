@@ -1,0 +1,49 @@
+services:
+  no-mestre:
+    build: ./mestre
+    container_name: no-mestre
+    ports:
+      - "5000:5000"
+    networks:
+      - rede-cluster
+    depends_on:
+      - no-1
+      - no-2
+      - no-3
+      - no-4
+
+  no-1:
+    build: ./worker
+    container_name: no-1
+    networks:
+      - rede-cluster
+    environment:
+      - NOME_NO=Nó 1
+
+  no-2:
+    build: ./worker
+    container_name: no-2
+    networks:
+      - rede-cluster
+    environment:
+      - NOME_NO=Nó 2
+
+  no-3:
+    build: ./worker
+    container_name: no-3
+    networks:
+      - rede-cluster
+    environment:
+      - NOME_NO=Nó 3
+
+  no-4:
+    build: ./worker
+    container_name: no-4
+    networks:
+      - rede-cluster
+    environment:
+      - NOME_NO=Nó 4
+
+networks:
+  rede-cluster:
+    driver: bridge
