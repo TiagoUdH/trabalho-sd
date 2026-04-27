@@ -3,15 +3,15 @@ import cv2
 import numpy as np
 import requests
 import concurrent.futures
+import os
 
 app = Flask(__name__)
 
-NOS = {
-    "quadrante_1": "http://no-1:5000/processar", 
-    "quadrante_2": "http://no-2:5000/processar", 
-    "quadrante_3": "http://no-3:5000/processar", 
-    "quadrante_4": "http://no-4:5000/processar"  
-}
+_workers_env = os.environ.get(
+    'WORKERS',
+    'http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar'
+)
+NOS = [url.strip() for url in _workers_env.split(',') if url.strip()]
 
 def enviar_para_no(url_do_no, nome_quadrante, imagem_cortada):
     sucesso, img_encoded = cv2.imencode('.png', imagem_cortada)
@@ -49,22 +49,19 @@ def analisar_imagem():
         return jsonify({"erro": "Mestre não conseguiu ler a imagem original"}), 400
 
     altura, largura, _ = img.shape
-    metade_a, metade_l = altura // 2, largura // 2
-
-    quadrantes = {
-        "quadrante_1": img[:metade_a, :metade_l].copy(),
-        "quadrante_2": img[:metade_a, metade_l:].copy(),
-        "quadrante_3": img[metade_a:, :metade_l].copy(),
-        "quadrante_4": img[metade_a:, metade_l:].copy() 
-    }
+    n = len(NOS)
+    tamanho_fatia = altura // n
+    fatias = [
+        img[i * tamanho_fatia : (i + 1) * tamanho_fatia if i < n - 1 else altura, :].copy()
+        for i in range(n)
+    ]
 
     resultados_finais = {}
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         futures = []
-        for nome, pedaco_img in quadrantes.items():
-            url = NOS[nome]
-            futures.append(executor.submit(enviar_para_no, url, nome, pedaco_img))
+        for i, (url, fatia) in enumerate(zip(NOS, fatias)):
+            futures.append(executor.submit(enviar_para_no, url, f'fatia_{i + 1}', fatia))
         
         for future in concurrent.futures.as_completed(futures):
             resultado = future.result()

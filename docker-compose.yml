@@ -6,6 +6,8 @@ services:
       - "5000:5000"
     networks:
       - rede-cluster
+    environment:
+      - WORKERS=http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar,http://no-5:5000/processar
     depends_on:
       - no-1
       - no-2
@@ -49,6 +51,15 @@ services:
       - rede-cluster
     environment:
       - NOME_NO=Nó 4
+    volumes:
+      - ./logs_visuais:/app/logs
+  no-5:
+    build: ./worker
+    container_name: no-5
+    networks:
+      - rede-cluster
+    environment:
+      - NOME_NO=Nó 5
     volumes:
       - ./logs_visuais:/app/logs
 
