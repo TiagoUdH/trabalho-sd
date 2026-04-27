@@ -6,32 +6,43 @@ import os
 app = Flask(__name__)
 nome_do_no = os.environ.get('NOME_NO', 'Worker Desconhecido')
 
+# Garante que a pasta de logs exista dentro do container
+os.makedirs('/app/logs', exist_ok=True)
+
 @app.route('/processar', methods=['POST'])
 def processar_quadrante():
     try:
-        # Verifica se recebeu o arquivo
         if 'imagem' not in request.files:
             return jsonify({"erro": "Nenhum arquivo recebido", "no_responsavel": nome_do_no})
             
         file = request.files['imagem']
         image_bytes = file.read()
 
-        # Decodifica a imagem
         np_img = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
         if img is None:
             return jsonify({"erro": "A imagem chegou corrompida no nó", "no_responsavel": nome_do_no})
 
-        # Processamento de IA / Visão Computacional
+        # --- INÍCIO DA GERAÇÃO DE LOGS ---
+        
+        # 1. Log no Terminal (O flush=True força o Docker a mostrar a mensagem na hora)
+        altura, largura, canais = img.shape
+        print(f"[{nome_do_no}] Recebeu fragmento. Resolução: {largura}x{altura} pixels.", flush=True)
+
+        # 2. Log Visual (Salva a imagem na pasta compartilhada com o Windows)
+        nome_arquivo = nome_do_no.replace(" ", "_") # Transforma "Nó 1" em "Nó_1"
+        caminho_salvar = f"/app/logs/{nome_arquivo}_recebido.png"
+        cv2.imwrite(caminho_salvar, img)
+        
+        # --- FIM DA GERAÇÃO DE LOGS ---
+
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-        # Máscara ajustada para pegar tanto o vermelho claro quanto o vermelho escuro (Paint)
         mask1 = cv2.inRange(hsv, np.array([0, 50, 50]), np.array([10, 255, 255]))
         mask2 = cv2.inRange(hsv, np.array([160, 50, 50]), np.array([180, 255, 255]))
         mascara = cv2.bitwise_or(mask1, mask2)
 
-        # bool() garante que o Flask consiga converter para JSON
         tem_vermelho = bool(np.any(mascara > 0))
 
         return jsonify({

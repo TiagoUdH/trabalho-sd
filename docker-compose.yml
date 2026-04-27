@@ -19,6 +19,8 @@ services:
       - rede-cluster
     environment:
       - NOME_NO=Nó 1
+    volumes:
+      - ./logs_visuais:/app/logs
 
   no-2:
     build: ./worker
@@ -27,6 +29,8 @@ services:
       - rede-cluster
     environment:
       - NOME_NO=Nó 2
+    volumes:
+      - ./logs_visuais:/app/logs
 
   no-3:
     build: ./worker
@@ -35,6 +39,8 @@ services:
       - rede-cluster
     environment:
       - NOME_NO=Nó 3
+    volumes:
+      - ./logs_visuais:/app/logs
 
   no-4:
     build: ./worker
@@ -43,6 +49,8 @@ services:
       - rede-cluster
     environment:
       - NOME_NO=Nó 4
+    volumes:
+      - ./logs_visuais:/app/logs
 
 networks:
   rede-cluster:
