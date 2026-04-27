@@ -8,11 +8,14 @@ services:
       - rede-cluster
     environment:
       - WORKERS=http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar,http://no-5:5000/processar
+      - SLICES=10
+      - MAX_RETRIES=3
     depends_on:
       - no-1
       - no-2
       - no-3
       - no-4
+      - no-5
 
   no-1:
     build: ./worker

@@ -1,0 +1,31 @@
+# Logs visuais gerados pelos workers
+logs_visuais/
+
+# Ambiente virtual Python
+.venv/
+venv/
+env/
+
+# Cache Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Arquivos de ambiente local
+.env
+.env.*
+
+# IDEs
+.vscode/
+.idea/
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Imagens de teste enviadas localmente
+*.jpg
+*.jpeg
+*.png
+*.bmp
+*.webp
