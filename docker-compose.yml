@@ -11,11 +11,16 @@ services:
       - SLICES=10
       - MAX_RETRIES=3
     depends_on:
-      - no-1
-      - no-2
-      - no-3
-      - no-4
-      - no-5
+      no-1:
+        condition: service_healthy
+      no-2:
+        condition: service_healthy
+      no-3:
+        condition: service_healthy
+      no-4:
+        condition: service_healthy
+      no-5:
+        condition: service_healthy
 
   no-1:
     build: ./worker
@@ -26,6 +31,13 @@ services:
       - NOME_NO=Nó 1
     volumes:
       - ./logs_visuais:/app/logs
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   no-2:
     build: ./worker
@@ -36,6 +48,13 @@ services:
       - NOME_NO=Nó 2
     volumes:
       - ./logs_visuais:/app/logs
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   no-3:
     build: ./worker
@@ -46,6 +65,13 @@ services:
       - NOME_NO=Nó 3
     volumes:
       - ./logs_visuais:/app/logs
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   no-4:
     build: ./worker
@@ -56,6 +82,14 @@ services:
       - NOME_NO=Nó 4
     volumes:
       - ./logs_visuais:/app/logs
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   no-5:
     build: ./worker
     container_name: no-5
@@ -65,6 +99,13 @@ services:
       - NOME_NO=Nó 5
     volumes:
       - ./logs_visuais:/app/logs
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
   rede-cluster:

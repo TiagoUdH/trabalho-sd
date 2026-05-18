@@ -9,6 +9,11 @@ nome_do_no = os.environ.get('NOME_NO', 'Worker Desconhecido')
 # Garante que a pasta de logs exista dentro do container
 os.makedirs('/app/logs', exist_ok=True)
 
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({"status": "ok", "no": nome_do_no}), 200
+
+
 @app.route('/processar', methods=['POST'])
 def processar_quadrante():
     try:
