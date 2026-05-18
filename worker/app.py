@@ -2,12 +2,27 @@ from flask import Flask, request, jsonify
 import cv2
 import numpy as np
 import os
+import json
+import logging
+import time
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 nome_do_no = os.environ.get('NOME_NO', 'Worker Desconhecido')
 
 # Garante que a pasta de logs exista dentro do container
 os.makedirs('/app/logs', exist_ok=True)
+
+def _log(request_id, evento, **kwargs):
+    logger.info(json.dumps({
+        "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S'),
+        "servico": nome_do_no,
+        "request_id": request_id,
+        "evento": evento,
+        **kwargs
+    }, ensure_ascii=False))
 
 @app.route('/health', methods=['GET'])
 def health():
@@ -17,6 +32,8 @@ def health():
 @app.route('/processar', methods=['POST'])
 def processar_quadrante():
     try:
+        request_id = request.headers.get('X-Request-ID', 'sem-id')
+
         if 'imagem' not in request.files:
             return jsonify({"erro": "Nenhum arquivo recebido", "no_responsavel": nome_do_no}), 400
             
@@ -29,18 +46,13 @@ def processar_quadrante():
         if img is None:
             return jsonify({"erro": "A imagem chegou corrompida no nó", "no_responsavel": nome_do_no}), 422
 
-        # --- INÍCIO DA GERAÇÃO DE LOGS ---
-        
-        # 1. Log no Terminal (O flush=True força o Docker a mostrar a mensagem na hora)
         altura, largura, canais = img.shape
-        print(f"[{nome_do_no}] Recebeu fragmento. Resolução: {largura}x{altura} pixels.", flush=True)
+        _log(request_id, 'fragmento_recebido', largura=largura, altura=altura)
 
-        # 2. Log Visual (Salva a imagem na pasta compartilhada com o Windows)
-        nome_arquivo = nome_do_no.replace(" ", "_") # Transforma "Nó 1" em "Nó_1"
-        caminho_salvar = f"/app/logs/{nome_arquivo}_recebido.png"
+        # Log Visual — filename inclui request_id para não sobrescrever registros anteriores
+        nome_arquivo = nome_do_no.replace(" ", "_")
+        caminho_salvar = f"/app/logs/{nome_arquivo}_{request_id}_recebido.png"
         cv2.imwrite(caminho_salvar, img)
-        
-        # --- FIM DA GERAÇÃO DE LOGS ---
 
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
@@ -50,8 +62,11 @@ def processar_quadrante():
 
         tem_vermelho = bool(np.any(mascara > 0))
 
+        _log(request_id, 'fragmento_processado', encontrou_vermelho=tem_vermelho)
+
         return jsonify({
             "no_responsavel": nome_do_no,
+            "request_id": request_id,
             "encontrou_vermelho": tem_vermelho
         })
     except Exception as e:

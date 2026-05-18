@@ -6,6 +6,21 @@ import threading
 import queue
 import time
 import os
+import uuid
+import json
+import logging
+
+logging.basicConfig(level=logging.INFO, format='%(message)s')
+logger = logging.getLogger(__name__)
+
+def _log(request_id, evento, **kwargs):
+    logger.info(json.dumps({
+        "timestamp": time.strftime('%Y-%m-%dT%H:%M:%S'),
+        "servico": "mestre",
+        "request_id": request_id,
+        "evento": evento,
+        **kwargs
+    }, ensure_ascii=False))
 
 app = Flask(__name__)
 
@@ -23,16 +38,17 @@ SLICES = int(os.environ.get('SLICES', len(NOS) * 2))
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', 3))
 
 
-def enviar_para_no(url_do_no, nome_fatia, imagem_cortada):
+def enviar_para_no(url_do_no, nome_fatia, imagem_cortada, request_id):
     sucesso, img_encoded = cv2.imencode('.png', imagem_cortada)
 
     if not sucesso:
         return {"erro": "Falha ao gerar pacote", "no_responsavel": url_do_no}
 
     files = {'imagem': (f'{nome_fatia}.png', img_encoded.tobytes(), 'image/png')}
+    headers = {'X-Request-ID': request_id}
 
     try:
-        resposta = requests.post(url_do_no, files=files, timeout=10)
+        resposta = requests.post(url_do_no, files=files, headers=headers, timeout=10)
         try:
             return resposta.json()
         except ValueError:
@@ -48,7 +64,7 @@ def enviar_para_no(url_do_no, nome_fatia, imagem_cortada):
         return {"erro": f"Erro inesperado: {type(e).__name__}", "no_responsavel": url_do_no}
 
 
-def consumidor(url_do_no, fila, resultados, lock, shutdown):
+def consumidor(url_do_no, fila, resultados, lock, shutdown, request_id):
     """Loop de um worker: fica ativo até o sinal de shutdown, puxa tarefas da
     fila e, em caso de falha, devolve a tarefa para que um worker DIFERENTE tente.
     O campo urls_falhas dentro da tarefa impede que o mesmo worker morto a repegue."""
@@ -67,7 +83,7 @@ def consumidor(url_do_no, fila, resultados, lock, shutdown):
             time.sleep(0.05)
             continue
 
-        resultado = enviar_para_no(url_do_no, nome_fatia, fatia)
+        resultado = enviar_para_no(url_do_no, nome_fatia, fatia, request_id)
 
         if 'encontrou_vermelho' in resultado:
             with lock:
@@ -111,6 +127,9 @@ def analisar_imagem():
     if not NOS:
         return jsonify({"erro": "Nenhum worker configurado"}), 500
 
+    request_id = str(uuid.uuid4())[:8]
+    _log(request_id, 'requisicao_recebida', fatias_planejadas=max(1, SLICES), workers=len(NOS))
+
     altura, _, _ = img.shape
     m = max(1, SLICES)
     tamanho_fatia = altura // m
@@ -127,7 +146,7 @@ def analisar_imagem():
     # Uma thread consumidora por worker. Workers ociosos puxam mais tarefas;
     # tarefas de workers que falharem são redistribuídas via fila.
     threads = [
-        threading.Thread(target=consumidor, args=(url, fila, resultados, lock, shutdown))
+        threading.Thread(target=consumidor, args=(url, fila, resultados, lock, shutdown, request_id))
         for url in NOS
     ]
     for t in threads:
@@ -137,6 +156,8 @@ def analisar_imagem():
     shutdown.set()    # Sinaliza os threads para encerrarem
     for t in threads:
         t.join()
+
+    _log(request_id, 'processamento_concluido', processadas=len([i for i in resultados.values() if 'encontrou_vermelho' in i]), falhas=len([i for i in resultados.values() if 'erro' in i]))
 
     # Conta carga distribuída por nó (quantas fatias cada worker processou com sucesso).
     carga_por_no = {}
@@ -165,6 +186,7 @@ def analisar_imagem():
         status_msg = "Processamento Distribuído Concluído"
 
     return jsonify({
+        "request_id": request_id,
         "status": status_msg,
         "fatias_processadas": len(sucessos),
         "fatias_com_falha": falhas,
