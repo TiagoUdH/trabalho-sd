@@ -172,6 +172,7 @@ def analisar_imagem():
     return jsonify({
         "request_id": request_id,
         "status": status_msg,
+        "encontrou_vermelho": tem_vermelho_geral,
         "fatias_processadas": len(sucessos),
         "fatias_com_falha": falhas,
         "carga_por_no": carga_por_no,
