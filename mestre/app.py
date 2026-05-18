@@ -1,9 +1,9 @@
 from flask import Flask, request, jsonify
 import cv2
 import numpy as np
-import requests
+import pika
+import base64
 import threading
-import queue
 import time
 import os
 import uuid
@@ -27,18 +27,10 @@ app = Flask(__name__)
 
 os.makedirs('/app/logs', exist_ok=True)
 
-_workers_env = os.environ.get(
-    'WORKERS',
-    'http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar'
-)
-NOS = [url.strip() for url in _workers_env.split(',') if url.strip()]
-
-# Quantas fatias gerar a partir da imagem. Maior que len(NOS) permite que
-# workers rápidos peguem mais trabalho que workers lentos (load balancing real).
-SLICES = int(os.environ.get('SLICES', len(NOS) * 2))
-
-# Quantas vezes uma fatia pode ser reenviada antes de ser dada como perdida.
-MAX_RETRIES = int(os.environ.get('MAX_RETRIES', 3))
+RABBITMQ_URL = os.environ.get('RABBITMQ_URL', 'amqp://guest:guest@rabbitmq:5672/')
+FILA_TAREFAS = 'tarefas'
+SLICES = int(os.environ.get('SLICES', 10))
+TIMEOUT_RESULTADO = int(os.environ.get('TIMEOUT_RESULTADO', 30))
 
 
 def _ascii(texto):
@@ -76,80 +68,6 @@ def salvar_log_visual(request_id, fatias, resultados):
     _log(request_id, 'log_visual_salvo', caminho=caminho)
 
 
-def enviar_para_no(url_do_no, nome_fatia, imagem_cortada, request_id):
-    sucesso, img_encoded = cv2.imencode('.png', imagem_cortada)
-
-    if not sucesso:
-        return {"erro": "Falha ao gerar pacote", "no_responsavel": url_do_no}
-
-    files = {'imagem': (f'{nome_fatia}.png', img_encoded.tobytes(), 'image/png')}
-    headers = {'X-Request-ID': request_id}
-
-    try:
-        resposta = requests.post(url_do_no, files=files, headers=headers, timeout=10)
-        try:
-            return resposta.json()
-        except ValueError:
-            return {
-                "erro": f"Erro interno do Worker (Status {resposta.status_code}): {resposta.text[:100]}",
-                "no_responsavel": url_do_no
-            }
-    except requests.exceptions.ConnectionError:
-        return {"erro": f"Worker indisponível (sem conexão)", "no_responsavel": url_do_no}
-    except requests.exceptions.Timeout:
-        return {"erro": f"Worker não respondeu no tempo limite (10s)", "no_responsavel": url_do_no}
-    except Exception as e:
-        return {"erro": f"Erro inesperado: {type(e).__name__}", "no_responsavel": url_do_no}
-
-
-def consumidor(url_do_no, fila, resultados, lock, shutdown, request_id):
-    """Loop de um worker: fica ativo até o sinal de shutdown, puxa tarefas da
-    fila e, em caso de falha, devolve a tarefa para que um worker DIFERENTE tente.
-    O campo urls_falhas dentro da tarefa impede que o mesmo worker morto a repegue."""
-    while not shutdown.is_set():
-        try:
-            tarefa = fila.get(timeout=0.1)
-        except queue.Empty:
-            continue
-
-        nome_fatia, fatia, tentativas, urls_falhas = tarefa
-
-        # Este worker já falhou nesta fatia antes — devolve para outro tentar.
-        if url_do_no in urls_falhas:
-            fila.put(tarefa)
-            fila.task_done()
-            time.sleep(0.05)
-            continue
-
-        resultado = enviar_para_no(url_do_no, nome_fatia, fatia, request_id)
-
-        if 'encontrou_vermelho' in resultado:
-            with lock:
-                resultados[nome_fatia] = {
-                    "no_responsavel": resultado.get('no_responsavel', url_do_no),
-                    "encontrou_vermelho": resultado['encontrou_vermelho'],
-                    "tentativas": tentativas + 1
-                }
-            fila.task_done()
-        else:
-            novas_falhas = urls_falhas + [url_do_no]
-            # Desiste se atingiu MAX_RETRIES ou se todos os workers já falharam.
-            if tentativas + 1 < MAX_RETRIES and len(novas_falhas) < len(NOS):
-                # Backoff exponencial: 1s, 2s, 4s... limitado a 8s.
-                backoff = min(2 ** tentativas, 8)
-                time.sleep(backoff)
-                fila.put((nome_fatia, fatia, tentativas + 1, novas_falhas))
-                fila.task_done()
-            else:
-                with lock:
-                    resultados[nome_fatia] = {
-                        "no_responsavel": url_do_no,
-                        "erro": resultado.get('erro', 'Erro desconhecido'),
-                        "tentativas": tentativas + 1
-                    }
-                fila.task_done()
-
-
 @app.route('/analisar', methods=['POST'])
 def analisar_imagem():
     if 'imagem' not in request.files:
@@ -162,47 +80,73 @@ def analisar_imagem():
     if img is None:
         return jsonify({"erro": "Mestre não conseguiu ler a imagem original"}), 400
 
-    if not NOS:
-        return jsonify({"erro": "Nenhum worker configurado"}), 500
-
     request_id = str(uuid.uuid4())[:8]
-    _log(request_id, 'requisicao_recebida', fatias_planejadas=max(1, SLICES), workers=len(NOS))
+    _log(request_id, 'requisicao_recebida', slices=SLICES)
 
     altura, _, _ = img.shape
     m = max(1, SLICES)
     tamanho_fatia = altura // m
     fatias = []
-    fila = queue.Queue()
     for i in range(m):
         inicio = i * tamanho_fatia
         fim = (i + 1) * tamanho_fatia if i < m - 1 else altura
-        fatia = img[inicio:fim, :].copy()
-        fatias.append(fatia)
-        fila.put((f'fatia_{i + 1}', fatia, 0, []))
+        fatias.append(img[inicio:fim, :].copy())
 
+    # Conecta ao broker e cria a fila de resposta exclusiva para este request
+    try:
+        conn = pika.BlockingConnection(pika.URLParameters(RABBITMQ_URL))
+        ch = conn.channel()
+        ch.queue_declare(queue=FILA_TAREFAS, durable=True)
+        reply_queue = ch.queue_declare(queue='', exclusive=True).method.queue
+    except Exception as e:
+        _log(request_id, 'erro_conexao_rabbitmq', erro=str(e))
+        return jsonify({'erro': 'Falha ao conectar ao broker'}), 503
+
+    # Publica cada fatia na fila de tarefas; workers competem para consumi-las
+    for i, fatia in enumerate(fatias):
+        nome = f'fatia_{i + 1}'
+        _, buf = cv2.imencode('.png', fatia)
+        ch.basic_publish(
+            exchange='',
+            routing_key=FILA_TAREFAS,
+            body=json.dumps({
+                'request_id': request_id,
+                'nome_fatia': nome,
+                'imagem': base64.b64encode(buf).decode('utf-8')
+            }),
+            properties=pika.BasicProperties(
+                delivery_mode=2,
+                reply_to=reply_queue,
+                correlation_id=request_id
+            )
+        )
+        _log(request_id, 'fatia_publicada', fatia=nome)
+
+    # Coleta resultados via fila de resposta exclusiva até completar ou expirar
     resultados = {}
-    lock = threading.Lock()
-    shutdown = threading.Event()
+    stop = threading.Event()
 
-    # Uma thread consumidora por worker. Workers ociosos puxam mais tarefas;
-    # tarefas de workers que falharem são redistribuídas via fila.
-    threads = [
-        threading.Thread(target=consumidor, args=(url, fila, resultados, lock, shutdown, request_id))
-        for url in NOS
-    ]
-    for t in threads:
-        t.start()
+    def on_result(channel, method, properties, body):
+        data = json.loads(body)
+        resultados[data['nome_fatia']] = data
+        channel.basic_ack(delivery_tag=method.delivery_tag)
+        _log(request_id, 'resultado_recebido', fatia=data['nome_fatia'], no=data.get('no_responsavel'))
+        if len(resultados) >= len(fatias):
+            stop.set()
 
-    fila.join()       # Aguarda todas as tarefas serem concluídas (task_done)
-    shutdown.set()    # Sinaliza os threads para encerrarem
-    for t in threads:
-        t.join()
+    ch.basic_consume(queue=reply_queue, on_message_callback=on_result)
 
+    deadline = time.time() + TIMEOUT_RESULTADO
+    while not stop.is_set() and time.time() < deadline:
+        conn.process_data_events(time_limit=0.5)
+
+    conn.close()
     salvar_log_visual(request_id, fatias, resultados)
 
-    _log(request_id, 'processamento_concluido', processadas=len([i for i in resultados.values() if 'encontrou_vermelho' in i]), falhas=len([i for i in resultados.values() if 'erro' in i]))
+    _log(request_id, 'processamento_concluido',
+         processadas=len([v for v in resultados.values() if 'encontrou_vermelho' in v]),
+         falhas=len([v for v in resultados.values() if 'encontrou_vermelho' not in v]))
 
-    # Conta carga distribuída por nó (quantas fatias cada worker processou com sucesso).
     carga_por_no = {}
     sucessos = []
     falhas = []
@@ -211,20 +155,17 @@ def analisar_imagem():
             sucessos.append(info['encontrou_vermelho'])
             carga_por_no[info['no_responsavel']] = carga_por_no.get(info['no_responsavel'], 0) + 1
         else:
-            falhas.append({"fatia": nome_fatia, "erro": info['erro']})
+            falhas.append({"fatia": nome_fatia, "erro": info.get('erro', 'Sem resposta (timeout)')})
 
     tem_vermelho_geral = any(sucessos)
 
     if len(sucessos) == 0:
-        # Falha total: nenhuma fatia foi processada
         status_http = 500
         status_msg = "Falha Total: nenhuma fatia processada"
     elif falhas:
-        # Falha parcial: algumas fatias não foram processadas
         status_http = 207
         status_msg = "Falha Parcial: algumas fatias não foram processadas"
     else:
-        # Sucesso total
         status_http = 200
         status_msg = "Processamento Distribuído Concluído"
 
