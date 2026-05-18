@@ -4,6 +4,7 @@ import numpy as np
 import requests
 import threading
 import queue
+import time
 import os
 
 app = Flask(__name__)
@@ -47,16 +48,25 @@ def enviar_para_no(url_do_no, nome_fatia, imagem_cortada):
         return {"erro": f"Erro inesperado: {type(e).__name__}", "no_responsavel": url_do_no}
 
 
-def consumidor(url_do_no, fila, resultados, lock):
-    """Loop de um worker: puxa tarefas da fila, processa, e em caso de falha
-    devolve a tarefa para a fila para que outro worker tente."""
-    while True:
+def consumidor(url_do_no, fila, resultados, lock, shutdown):
+    """Loop de um worker: fica ativo até o sinal de shutdown, puxa tarefas da
+    fila e, em caso de falha, devolve a tarefa para que um worker DIFERENTE tente.
+    O campo urls_falhas dentro da tarefa impede que o mesmo worker morto a repegue."""
+    while not shutdown.is_set():
         try:
-            tarefa = fila.get_nowait()
+            tarefa = fila.get(timeout=0.1)
         except queue.Empty:
-            return
+            continue
 
-        nome_fatia, fatia, tentativas = tarefa
+        nome_fatia, fatia, tentativas, urls_falhas = tarefa
+
+        # Este worker já falhou nesta fatia antes — devolve para outro tentar.
+        if url_do_no in urls_falhas:
+            fila.put(tarefa)
+            fila.task_done()
+            time.sleep(0.05)
+            continue
+
         resultado = enviar_para_no(url_do_no, nome_fatia, fatia)
 
         if 'encontrou_vermelho' in resultado:
@@ -68,9 +78,10 @@ def consumidor(url_do_no, fila, resultados, lock):
                 }
             fila.task_done()
         else:
-            # Falha: devolve a tarefa para a fila se ainda houver tentativas.
-            if tentativas + 1 < MAX_RETRIES:
-                fila.put((nome_fatia, fatia, tentativas + 1))
+            novas_falhas = urls_falhas + [url_do_no]
+            # Desiste se atingiu MAX_RETRIES ou se todos os workers já falharam.
+            if tentativas + 1 < MAX_RETRIES and len(novas_falhas) < len(NOS):
+                fila.put((nome_fatia, fatia, tentativas + 1, novas_falhas))
                 fila.task_done()
             else:
                 with lock:
@@ -104,19 +115,23 @@ def analisar_imagem():
     for i in range(m):
         inicio = i * tamanho_fatia
         fim = (i + 1) * tamanho_fatia if i < m - 1 else altura
-        fila.put((f'fatia_{i + 1}', img[inicio:fim, :].copy(), 0))
+        fila.put((f'fatia_{i + 1}', img[inicio:fim, :].copy(), 0, []))
 
     resultados = {}
     lock = threading.Lock()
+    shutdown = threading.Event()
 
     # Uma thread consumidora por worker. Workers ociosos puxam mais tarefas;
     # tarefas de workers que falharem são redistribuídas via fila.
     threads = [
-        threading.Thread(target=consumidor, args=(url, fila, resultados, lock))
+        threading.Thread(target=consumidor, args=(url, fila, resultados, lock, shutdown))
         for url in NOS
     ]
     for t in threads:
         t.start()
+
+    fila.join()       # Aguarda todas as tarefas serem concluídas (task_done)
+    shutdown.set()    # Sinaliza os threads para encerrarem
     for t in threads:
         t.join()
 
