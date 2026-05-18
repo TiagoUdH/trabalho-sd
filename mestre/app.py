@@ -151,14 +151,27 @@ def analisar_imagem():
 
     tem_vermelho_geral = any(sucessos)
 
+    if len(sucessos) == 0:
+        # Falha total: nenhuma fatia foi processada
+        status_http = 500
+        status_msg = "Falha Total: nenhuma fatia processada"
+    elif falhas:
+        # Falha parcial: algumas fatias não foram processadas
+        status_http = 207
+        status_msg = "Falha Parcial: algumas fatias não foram processadas"
+    else:
+        # Sucesso total
+        status_http = 200
+        status_msg = "Processamento Distribuído Concluído"
+
     return jsonify({
-        "status": "Processamento Distribuído Concluído",
+        "status": status_msg,
         "fatias_processadas": len(sucessos),
         "fatias_com_falha": falhas,
         "carga_por_no": carga_por_no,
         "detalhes_por_fatia": resultados,
         "conclusao_final": f"A cor vermelha {'FOI' if tem_vermelho_geral else 'NÃO FOI'} detectada na imagem."
-    })
+    }), status_http
 
 
 if __name__ == '__main__':

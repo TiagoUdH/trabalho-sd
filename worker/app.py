@@ -18,7 +18,7 @@ def health():
 def processar_quadrante():
     try:
         if 'imagem' not in request.files:
-            return jsonify({"erro": "Nenhum arquivo recebido", "no_responsavel": nome_do_no})
+            return jsonify({"erro": "Nenhum arquivo recebido", "no_responsavel": nome_do_no}), 400
             
         file = request.files['imagem']
         image_bytes = file.read()
@@ -27,7 +27,7 @@ def processar_quadrante():
         img = cv2.imdecode(np_img, cv2.IMREAD_COLOR)
 
         if img is None:
-            return jsonify({"erro": "A imagem chegou corrompida no nó", "no_responsavel": nome_do_no})
+            return jsonify({"erro": "A imagem chegou corrompida no nó", "no_responsavel": nome_do_no}), 422
 
         # --- INÍCIO DA GERAÇÃO DE LOGS ---
         
@@ -55,7 +55,7 @@ def processar_quadrante():
             "encontrou_vermelho": tem_vermelho
         })
     except Exception as e:
-        return jsonify({"erro": f"Crash interno: {str(e)}", "no_responsavel": nome_do_no})
+        return jsonify({"erro": f"Crash interno: {str(e)}", "no_responsavel": nome_do_no}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
