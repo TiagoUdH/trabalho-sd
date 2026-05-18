@@ -81,6 +81,9 @@ def consumidor(url_do_no, fila, resultados, lock, shutdown):
             novas_falhas = urls_falhas + [url_do_no]
             # Desiste se atingiu MAX_RETRIES ou se todos os workers já falharam.
             if tentativas + 1 < MAX_RETRIES and len(novas_falhas) < len(NOS):
+                # Backoff exponencial: 1s, 2s, 4s... limitado a 8s.
+                backoff = min(2 ** tentativas, 8)
+                time.sleep(backoff)
                 fila.put((nome_fatia, fatia, tentativas + 1, novas_falhas))
                 fila.task_done()
             else:
