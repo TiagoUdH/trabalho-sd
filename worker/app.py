@@ -49,10 +49,6 @@ def processar_quadrante():
         altura, largura, canais = img.shape
         _log(request_id, 'fragmento_recebido', largura=largura, altura=altura)
 
-        # Log Visual — filename inclui request_id para não sobrescrever registros anteriores
-        nome_arquivo = nome_do_no.replace(" ", "_")
-        caminho_salvar = f"/app/logs/{nome_arquivo}_{request_id}_recebido.png"
-        cv2.imwrite(caminho_salvar, img)
 
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 

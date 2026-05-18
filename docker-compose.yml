@@ -10,6 +10,8 @@ services:
       - WORKERS=http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar,http://no-5:5000/processar
       - SLICES=10
       - MAX_RETRIES=3
+    volumes:
+      - ./logs_visuais:/app/logs
     depends_on:
       no-1:
         condition: service_healthy

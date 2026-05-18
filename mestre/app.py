@@ -9,6 +9,7 @@ import os
 import uuid
 import json
 import logging
+import unicodedata
 
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ def _log(request_id, evento, **kwargs):
 
 app = Flask(__name__)
 
+os.makedirs('/app/logs', exist_ok=True)
+
 _workers_env = os.environ.get(
     'WORKERS',
     'http://no-1:5000/processar,http://no-2:5000/processar,http://no-3:5000/processar,http://no-4:5000/processar'
@@ -36,6 +39,41 @@ SLICES = int(os.environ.get('SLICES', len(NOS) * 2))
 
 # Quantas vezes uma fatia pode ser reenviada antes de ser dada como perdida.
 MAX_RETRIES = int(os.environ.get('MAX_RETRIES', 3))
+
+
+def _ascii(texto):
+    """Remove acentos para compatibilidade com cv2.putText (não suporta Unicode)."""
+    return unicodedata.normalize('NFKD', texto).encode('ascii', 'ignore').decode('ascii')
+
+
+def salvar_log_visual(request_id, fatias, resultados):
+    """Empilha todas as fatias, anota o worker responsável e o resultado,
+    e salva uma imagem única em /app/logs/resultado_<request_id>.png."""
+    fatias_anotadas = []
+    for i, fatia in enumerate(fatias):
+        nome_fatia = f'fatia_{i + 1}'
+        info = resultados.get(nome_fatia, {})
+        copia = fatia.copy()
+        # Garante altura mínima para o texto ficar visível
+        if copia.shape[0] < 30:
+            copia = cv2.copyMakeBorder(copia, 0, 30 - copia.shape[0], 0, 0, cv2.BORDER_CONSTANT)
+
+        if 'encontrou_vermelho' in info:
+            cor = (0, 0, 220) if info['encontrou_vermelho'] else (0, 180, 0)
+            label = _ascii(f"{nome_fatia} | {info['no_responsavel']} | {'VERMELHO' if info['encontrou_vermelho'] else 'sem vermelho'}")
+        else:
+            cor = (100, 100, 100)
+            label = _ascii(f"{nome_fatia} | FALHA")
+
+        cv2.rectangle(copia, (0, 0), (copia.shape[1] - 1, copia.shape[0] - 1), cor, 3)
+        cv2.putText(copia, label, (8, min(22, copia.shape[0] - 4)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, cor, 2, cv2.LINE_AA)
+        fatias_anotadas.append(copia)
+
+    imagem_completa = np.vstack(fatias_anotadas)
+    caminho = f'/app/logs/resultado_{request_id}.png'
+    cv2.imwrite(caminho, imagem_completa)
+    _log(request_id, 'log_visual_salvo', caminho=caminho)
 
 
 def enviar_para_no(url_do_no, nome_fatia, imagem_cortada, request_id):
@@ -133,11 +171,14 @@ def analisar_imagem():
     altura, _, _ = img.shape
     m = max(1, SLICES)
     tamanho_fatia = altura // m
+    fatias = []
     fila = queue.Queue()
     for i in range(m):
         inicio = i * tamanho_fatia
         fim = (i + 1) * tamanho_fatia if i < m - 1 else altura
-        fila.put((f'fatia_{i + 1}', img[inicio:fim, :].copy(), 0, []))
+        fatia = img[inicio:fim, :].copy()
+        fatias.append(fatia)
+        fila.put((f'fatia_{i + 1}', fatia, 0, []))
 
     resultados = {}
     lock = threading.Lock()
@@ -156,6 +197,8 @@ def analisar_imagem():
     shutdown.set()    # Sinaliza os threads para encerrarem
     for t in threads:
         t.join()
+
+    salvar_log_visual(request_id, fatias, resultados)
 
     _log(request_id, 'processamento_concluido', processadas=len([i for i in resultados.values() if 'encontrou_vermelho' in i]), falhas=len([i for i in resultados.values() if 'erro' in i]))
 
