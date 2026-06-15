@@ -1,4 +1,5 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 import cv2
 import numpy as np
 import pika
@@ -24,6 +25,7 @@ def _log(request_id, evento, **kwargs):
     }, ensure_ascii=False))
 
 app = Flask(__name__)
+CORS(app)
 
 os.makedirs('/app/logs', exist_ok=True)
 
@@ -81,6 +83,7 @@ def analisar_imagem():
         return jsonify({"erro": "Mestre não conseguiu ler a imagem original"}), 400
 
     request_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
     _log(request_id, 'requisicao_recebida', slices=SLICES)
 
     altura, _, _ = img.shape
@@ -169,6 +172,8 @@ def analisar_imagem():
         status_http = 200
         status_msg = "Processamento Distribuído Concluído"
 
+    tempo_ms = round((time.time() - t0) * 1000)
+
     return jsonify({
         "request_id": request_id,
         "status": status_msg,
@@ -177,8 +182,17 @@ def analisar_imagem():
         "fatias_com_falha": falhas,
         "carga_por_no": carga_por_no,
         "detalhes_por_fatia": resultados,
-        "conclusao_final": f"A cor vermelha {'FOI' if tem_vermelho_geral else 'NÃO FOI'} detectada na imagem."
+        "conclusao_final": f"A cor vermelha {'FOI' if tem_vermelho_geral else 'NÃO FOI'} detectada na imagem.",
+        "tempo_ms": tempo_ms
     }), status_http
+
+
+@app.route('/resultado/<request_id>/imagem', methods=['GET'])
+def obter_imagem_resultado(request_id):
+    caminho = f'/app/logs/resultado_{request_id}.png'
+    if not os.path.exists(caminho):
+        return jsonify({"erro": "Imagem de resultado nao encontrada"}), 404
+    return send_file(caminho, mimetype='image/png')
 
 
 if __name__ == '__main__':
