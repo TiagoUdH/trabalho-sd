@@ -1,0 +1,24 @@
+# =====================================================================
+# Kustomization: orquestrador de deploy
+# Aplica todos os manifestos do diretorio de uma vez com:
+#   kubectl apply -k k8s/
+#
+# Ordem de deploy (o Kubernetes resolve dependencias automaticamente):
+# 1. namespace.yaml  -> cria o namespace sistema-sd
+# 2. rabbitmq.yaml   -> sobe o broker (Service + Deployment)
+# 3. worker.yaml     -> sobe 5 workers (Deployment)
+# 4. mestre.yaml     -> sobe o mestre (Service + Deployment)
+# =====================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Todos os recursos serao criados dentro do namespace sistema-sd
+# Isso evita ter que repetir "namespace: sistema-sd" em cada arquivo
+namespace: sistema-sd
+
+# Lista de recursos que serao aplicados em sequencia
+resources:
+  - namespace.yaml
+  - rabbitmq.yaml
+  - worker.yaml
+  - mestre.yaml

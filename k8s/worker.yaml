@@ -1,0 +1,65 @@
+# =====================================================================
+# Workers - Nós de Processamento
+# Deployment com 5 replicas identicas. Cada worker:
+# 1. Conecta ao RabbitMQ e consome tarefas da fila "tarefas"
+# 2. Processa a fatia de imagem (deteccao de cor vermelha com OpenCV)
+# 3. Publica o resultado na fila de resposta exclusiva do mestre
+#
+# Workers competem entre si: quem pegar a tarefa primeiro processa.
+# O campo NOME_NO usa metadata.name do pod para identificar cada worker.
+# =====================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: sistema-sd
+spec:
+  replicas: 5                      # 5 workers processando em paralelo
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker                # Label usado internamente pelo Deployment
+    spec:
+      containers:
+        - name: worker
+          image: trabalho-sd-worker:latest    # Imagem buildada localmente
+          imagePullPolicy: IfNotPresent       # Usa cache local, nao puxa do registry
+          ports:
+            - containerPort: 5000            # Porta do Flask (usada pelo health check)
+
+          env:
+            # NOME_NO: usa o nome do pod como identificador (ex: worker-7d4f8b9c-x2k9)
+            # Isso permite distinguir qual worker processou cada fatia nos logs
+            - name: NOME_NO
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+            # RABBITMQ_URL: endereco do broker usando DNS interno do Kubernetes
+            # Formato: <servico>.<namespace>.svc.cluster.local:<porta>
+            - name: RABBITMQ_URL
+              value: amqp://guest:guest@rabbitmq.sistema-sd.svc.cluster.local:5672/
+
+          # readinessProbe: verifica se o Flask esta respondendo no /health
+          # Enquanto nao estiver pronto, o pod nao recebe trafego
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5    # Aguarda 5s apos inicio do container
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3       # 3 falhas seguidas = NotReady
+
+          # livenessProbe: verifica se o container esta vivo
+          # Se falhar 3x consecutivas, o Kubernetes reinicia o pod
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+            timeoutSeconds: 5

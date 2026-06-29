@@ -1,0 +1,73 @@
+# =====================================================================
+# RabbitMQ - Message Broker (fila de mensagens)
+# Componente central que desacopla mestre e workers.
+# O mestre publica tarefas na fila "tarefas" e os workers competem
+# para consumi-las. Usa o protocolo AMQP na porta 5672.
+# =====================================================================
+
+# --- Service: expoe o RabbitMQ dentro do cluster ---
+# Permite que mestre e workers acessem o broker pelo nome DNS
+# rabbitmq.sistema-sd.svc.cluster.local
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq
+  namespace: sistema-sd
+spec:
+  # Seleciona pods com o label app=rabbitmq
+  selector:
+    app: rabbitmq
+  ports:
+    # Porta 5672: protocolo AMQP usado pelo mestre e workers
+    - name: amqp
+      port: 5672
+      targetPort: 5672
+    # Porta 15672: interface web de gerenciamento do RabbitMQ
+    - name: management
+      port: 15672
+      targetPort: 15672
+
+---
+# --- Deployment: mantem 1 replica do RabbitMQ rodando ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq
+  namespace: sistema-sd
+spec:
+  replicas: 1                     # Broker unico (nao replica o estado)
+  selector:
+    matchLabels:
+      app: rabbitmq
+  template:
+    metadata:
+      labels:
+        app: rabbitmq              # Label usado pelo Service para encontrar o pod
+    spec:
+      containers:
+        - name: rabbitmq
+          image: rabbitmq:3.13-management-alpine   # Imagem leve com Alpine Linux
+          ports:
+            - containerPort: 5672
+              name: amqp
+            - containerPort: 15672
+              name: management
+
+          # readinessProbe: verifica se o RabbitMQ esta pronto para receber conexoes
+          # Usa o comando nativo "rabbitmq-diagnostics ping"
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "ping"]
+            initialDelaySeconds: 10   # Aguarda 10s antes da primeira checagem
+            periodSeconds: 10         # Checa a cada 10s
+            timeoutSeconds: 5         # Timeout de 5s por tentativa
+            failureThreshold: 5       # Tolera 5 falhas antes de marcar como NotReady
+
+          # livenessProbe: verifica se o container esta vivo e saudavel
+          # Se falhar, o Kubernetes reinicia o container
+          livenessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "ping"]
+            initialDelaySeconds: 30   # Aguarda 30s antes da primeira checagem
+            periodSeconds: 10
+            timeoutSeconds: 5

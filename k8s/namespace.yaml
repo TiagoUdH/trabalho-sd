@@ -1,0 +1,9 @@
+# =====================================================================
+# Namespace: sistema-sd
+# Isola todos os recursos do projeto em um namespace proprio.
+# Evita conflitos com outras aplicacoes no mesmo cluster.
+# =====================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sistema-sd

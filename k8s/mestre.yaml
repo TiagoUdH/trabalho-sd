@@ -1,0 +1,65 @@
+# =====================================================================
+# Nó Mestre - Coordenador do Sistema
+# Responsavel por:
+# 1. Receber imagens via POST /analisar
+# 2. Dividir a imagem em SLICES fatias horizontais
+# 3. Publicar as fatias na fila "tarefas" do RabbitMQ
+# 4. Aguardar os resultados dos workers via fila de resposta exclusiva
+# 5. Consolidar e retornar o relatorio final ao cliente
+# =====================================================================
+
+# --- Service: expoe o mestre para acesso externo ---
+# Tipo LoadBalancer: ideal para cloud (EKS, GKE, AKS)
+# Para Minikube use: minikube service mestre -n sistema-sd
+# Para acesso local sem LoadBalancer use: kubectl port-forward
+apiVersion: v1
+kind: Service
+metadata:
+  name: mestre
+  namespace: sistema-sd
+spec:
+  selector:
+    app: mestre                 # Roteia trafego para pods com label app=mestre
+  ports:
+    - port: 5000                # Porta do Service
+      targetPort: 5000          # Porta do container Flask
+  type: LoadBalancer            # Expõe externamente (em cloud recebe IP publico)
+
+---
+# --- Deployment: mantem 1 replica do mestre rodando ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mestre
+  namespace: sistema-sd
+spec:
+  replicas: 1                   # Mestre unico (coordenador central)
+  selector:
+    matchLabels:
+      app: mestre
+  template:
+    metadata:
+      labels:
+        app: mestre             # Label usado pelo Service para encontrar o pod
+    spec:
+      containers:
+        - name: mestre
+          image: trabalho-sd-mestre:latest     # Imagem buildada localmente
+          imagePullPolicy: IfNotPresent        # Usa cache local, nao puxa do registry
+          ports:
+            - containerPort: 5000              # Porta do servidor Flask
+
+          env:
+            # RABBITMQ_URL: endereco do broker RabbitMQ via DNS interno do K8s
+            - name: RABBITMQ_URL
+              value: amqp://guest:guest@rabbitmq.sistema-sd.svc.cluster.local:5672/
+
+            # SLICES: em quantas fatias a imagem sera dividida
+            # 5 workers = 5 fatias para processamento paralelo otimo
+            - name: SLICES
+              value: "5"
+
+            # TIMEOUT_RESULTADO: tempo maximo (segundos) que o mestre aguarda
+            # os resultados dos workers antes de considerar falha
+            - name: TIMEOUT_RESULTADO
+              value: "30"

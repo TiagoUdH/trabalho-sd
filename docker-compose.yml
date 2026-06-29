@@ -1,34 +1,58 @@
+# =====================================================================
+# Docker Compose - Ambiente de Desenvolvimento Local
+# Orquestra todos os containers do sistema distribuido em uma unica maquina.
+#
+# Arquitetura:
+#   rabbitmq (broker)  <--  no-mestre (coordenador)  <--  cliente HTTP
+#                            |
+#                            +--> no-1 .. no-5 (workers competem pelas tarefas)
+#
+# Para subir tudo:  docker-compose up --build
+# Para parar tudo:  docker-compose down
+# =====================================================================
+
 services:
+
+  # -------------------------------------------------------------------
+  # RabbitMQ - Message Broker
+  # Fila central que desacopla mestre e workers. O mestre publica
+  # tarefas e os workers competem para consumi-las (protocolo AMQP).
+  # -------------------------------------------------------------------
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
+    image: rabbitmq:3.13-management-alpine   # Versao leve baseada em Alpine Linux
     container_name: rabbitmq
     networks:
-      - rede-cluster
+      - rede-cluster                         # Rede interna isolada do cluster
     ports:
-      - "15672:15672"
+      - "15672:15672"                        # Interface web de gerenciamento (guest/guest)
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]   # Verifica se o broker esta vivo
+      interval: 10s                          # Checa a cada 10 segundos
+      timeout: 5s                            # Timeout de 5s por tentativa
+      retries: 5                             # 5 falhas consecutivas = unhealthy
+      start_period: 30s                      # Aguarda 30s antes da primeira checagem
 
+  # -------------------------------------------------------------------
+  # No Mestre - Coordenador do Sistema
+  # Recebe imagens via POST /analisar, divide em 5 fatias, publica no
+  # RabbitMQ, coleta resultados e retorna o relatorio consolidado.
+  # -------------------------------------------------------------------
   no-mestre:
-    build: ./mestre
+    build: ./mestre                          # Builda a imagem a partir do Dockerfile em ./mestre
     container_name: no-mestre
     ports:
-      - "5000:5000"
+      - "5000:5000"                          # Expõe a API Flask na porta 5000
     networks:
       - rede-cluster
     environment:
-      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
-      - SLICES=10
-      - TIMEOUT_RESULTADO=30
+      - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/   # Endereco do broker (usa nome do container)
+      - SLICES=5                              # Divide a imagem em 5 fatias (1 por worker)
+      - TIMEOUT_RESULTADO=30                  # Aguarda ate 30s pelos resultados dos workers
     volumes:
-      - ./logs_visuais:/app/logs
+      - ./logs_visuais:/app/logs             # Monta pasta local para logs visuais (imagens PNG)
     depends_on:
       rabbitmq:
-        condition: service_healthy
+        condition: service_healthy           # So inicia apos RabbitMQ estar saudavel
       no-1:
         condition: service_healthy
       no-2:
@@ -40,34 +64,46 @@ services:
       no-5:
         condition: service_healthy
 
+  # -------------------------------------------------------------------
+  # Nos Workers (no-1 a no-5)
+  # Cada worker e um container identico que:
+  # 1. Conecta ao RabbitMQ e fica ouvindo a fila "tarefas"
+  # 2. Processa a fatia de imagem (deteccao de cor vermelha com OpenCV)
+  # 3. Devolve o resultado na fila de resposta exclusiva do mestre
+  #
+  # Workers competem entre si: o primeiro disponivel pega a tarefa.
+  # -------------------------------------------------------------------
+
+  # --- Worker 1 ---
   no-1:
-    build: ./worker
+    build: ./worker                          # Builda a partir do Dockerfile em ./worker
     container_name: no-1
     networks:
       - rede-cluster
     environment:
-      - NOME_NO=Nó 1
+      - NOME_NO=No 1                         # Identificador exibido nos logs e resultados
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       rabbitmq:
-        condition: service_healthy
+        condition: service_healthy           # So inicia apos o broker estar pronto
     volumes:
-      - ./logs_visuais:/app/logs
-    restart: on-failure
+      - ./logs_visuais:/app/logs             # Mesma pasta de logs do mestre (compartilhada)
+    restart: on-failure                      # Reinicia automaticamente se o processo falhar
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"]
       interval: 10s
       timeout: 5s
-      retries: 3
-      start_period: 10s
+      retries: 3                             # 3 falhas = unhealthy
+      start_period: 10s                      # Aguarda 10s antes da primeira checagem
 
+  # --- Worker 2 ---
   no-2:
     build: ./worker
     container_name: no-2
     networks:
       - rede-cluster
     environment:
-      - NOME_NO=Nó 2
+      - NOME_NO=No 2
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       rabbitmq:
@@ -82,13 +118,14 @@ services:
       retries: 3
       start_period: 10s
 
+  # --- Worker 3 ---
   no-3:
     build: ./worker
     container_name: no-3
     networks:
       - rede-cluster
     environment:
-      - NOME_NO=Nó 3
+      - NOME_NO=No 3
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       rabbitmq:
@@ -103,13 +140,14 @@ services:
       retries: 3
       start_period: 10s
 
+  # --- Worker 4 ---
   no-4:
     build: ./worker
     container_name: no-4
     networks:
       - rede-cluster
     environment:
-      - NOME_NO=Nó 4
+      - NOME_NO=No 4
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       rabbitmq:
@@ -124,13 +162,14 @@ services:
       retries: 3
       start_period: 10s
 
+  # --- Worker 5 ---
   no-5:
     build: ./worker
     container_name: no-5
     networks:
       - rede-cluster
     environment:
-      - NOME_NO=Nó 5
+      - NOME_NO=No 5
       - RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672/
     depends_on:
       rabbitmq:
@@ -145,6 +184,11 @@ services:
       retries: 3
       start_period: 10s
 
+# -------------------------------------------------------------------
+# Rede interna do cluster
+# Todos os containers se comunicam por nomes (ex: "rabbitmq", "no-1")
+# Isolada do resto do sistema.
+# -------------------------------------------------------------------
 networks:
   rede-cluster:
-    driver: bridge
+    driver: bridge                           # Rede bridge padrao do Docker
