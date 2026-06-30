@@ -219,3 +219,22 @@ Projeto educacional para estudo de sistemas distribuídos.
 
 **Autor**: Você  
 **Data**: 2026
+
+# 1. Conectar ao Docker DO Minikube (senao a imagem vai pro Docker do Windows)
+minikube docker-env | Invoke-Expression
+
+# 2. Buildar as imagens DENTRO do Minikube
+docker build -t trabalho-sd-mestre:latest .\mestre
+docker build -t trabalho-sd-worker:latest .\worker
+
+# 3. Subir tudo (use --validate=false se der erro de validação)
+kubectl apply -k k8s\ --validate=false
+
+# 4. Verificar pods
+kubectl -n sistema-sd get pods
+
+# 5. Acessar o mestre
+minikube service mestre -n sistema-sd
+
+# 6. RabbitMQ Management
+kubectl -n sistema-sd port-forward svc/rabbitmq 15672:15672

@@ -16,7 +16,7 @@ import pytest
 import requests
 from PIL import Image
 
-BASE_URL = os.getenv('MESTRE_URL', 'http://localhost:5000')
+BASE_URL = os.getenv('MESTRE_URL', 'http://127.0.0.1:60363')
 TIMEOUT = 60  # segundos aguardados para o mestre coletar todos os resultados
 
 
@@ -99,26 +99,61 @@ def test_campos_obrigatorios_na_resposta():
 
 # ── 4. Tolerância a falhas ───────────────────────────────────────────────────
 
+def _detecta_ambiente():
+    """Detecta se estamos no Docker Compose ou Kubernetes."""
+    try:
+        subprocess.run(
+            ['kubectl', '-n', 'sistema-sd', 'get', 'deployment', 'worker'],
+            check=True, capture_output=True
+        )
+        return 'k8s'
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return 'docker'
+
+
 def test_worker_parado_redistribui():
     """
-    Com o no-1 parado, o RabbitMQ redistribui as fatias para os demais workers.
-    O sistema deve concluir o processamento sem intervenção manual.
+    Com um worker a menos, o RabbitMQ redistribui as fatias para os demais.
+    O sistema deve concluir o processamento sem intervencao manual.
+    Funciona tanto no Docker Compose (docker stop no-1) quanto no K8s (scale down).
     """
-    subprocess.run(['docker', 'stop', 'no-1'], check=True, capture_output=True)
-    try:
-        time.sleep(2)  # aguarda a parada efetiva do container
-        resp = requests.post(
-            f'{BASE_URL}/analisar',
-            files={'imagem': ('test.png', _png((220, 30, 30)), 'image/png')},
-            timeout=TIMEOUT,
+    ambiente = _detecta_ambiente()
+
+    if ambiente == 'k8s':
+        # Reduz de 5 para 4 replicas, simulando um worker parado
+        subprocess.run(
+            ['kubectl', '-n', 'sistema-sd', 'scale', 'deployment/worker', '--replicas=4'],
+            check=True, capture_output=True
         )
-        data = resp.json()
-        # Sistema ainda processa com um worker a menos
-        assert resp.status_code in (200, 207)
-        assert data.get('fatias_processadas', 0) > 0
-        # Nó 1 parado não deve aparecer na distribuição de carga
-        assert 'Nó 1' not in data.get('carga_por_no', {}), (
-            'Nó 1 estava parado mas apareceu como responsável por alguma fatia'
-        )
-    finally:
-        subprocess.run(['docker', 'start', 'no-1'], capture_output=True)
+        time.sleep(5)  # Aguarda o scale-down e rebalance do RabbitMQ
+        try:
+            resp = requests.post(
+                f'{BASE_URL}/analisar',
+                files={'imagem': ('test.png', _png((220, 30, 30)), 'image/png')},
+                timeout=TIMEOUT,
+            )
+            data = resp.json()
+            assert resp.status_code in (200, 207)
+            assert data.get('fatias_processadas', 0) > 0
+        finally:
+            subprocess.run(
+                ['kubectl', '-n', 'sistema-sd', 'scale', 'deployment/worker', '--replicas=5'],
+                capture_output=True
+            )
+    else:
+        subprocess.run(['docker', 'stop', 'no-1'], check=True, capture_output=True)
+        try:
+            time.sleep(2)
+            resp = requests.post(
+                f'{BASE_URL}/analisar',
+                files={'imagem': ('test.png', _png((220, 30, 30)), 'image/png')},
+                timeout=TIMEOUT,
+            )
+            data = resp.json()
+            assert resp.status_code in (200, 207)
+            assert data.get('fatias_processadas', 0) > 0
+            assert 'Nó 1' not in data.get('carga_por_no', {}), (
+                'No 1 estava parado mas apareceu como responsavel por alguma fatia'
+            )
+        finally:
+            subprocess.run(['docker', 'start', 'no-1'], capture_output=True)
